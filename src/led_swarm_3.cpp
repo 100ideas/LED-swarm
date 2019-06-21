@@ -28,11 +28,14 @@
 // some build configurations I tested
 //#define NANO150
 // #define NANO60
-#define NANODOT
+// #define NANODOT
 //#define TEENSY144
 // #define TEENSY150  // original from Chuck
 //#define NANO100APA102
 //#define STRONGMAN
+
+#define NANODOTPROTOBOARD 
+// #define NANODOT
 
 #ifdef NANO100APA102
 #define NANO
@@ -64,15 +67,32 @@
 #endif
 
 #ifdef NANODOT
-#define SUPERLEADER
+// #define SUPERFOLLOWER
 #define NANO
 #define USERADIO
-#define RGBORDER BGR
+#define RGBORDER RGB
 #define NUM_LEDS 60                                // how long our strip is
+#define CHIP WS2811
+#define DATA_PIN 5
+// dotstars
+// #define CLOCK_PIN 2
+// #define CHIP APA102
+// #define RGBORDER BGR
+#endif
+
+#ifdef NANODOTPROTOBOARD  //nanoatmega328 not nanoatmega328new in platformio.ini
+// #define SUPERLEADER
+#define NANO
+#define USERADIO
+#define RGBORDER RGB
+#define NUM_LEDS 60                                // how long our strip is
+#define CHIP WS2811
 #define DATA_PIN 3
-#define CLOCK_PIN 2
-#define CHIP APA102
 #define PIN_PUSHBUTTON 4
+// dotstars
+// #define CLOCK_PIN 2
+// #define CHIP APA102
+// #define RGBORDER BGR
 #endif
 
 #ifdef TEENSY150
@@ -153,6 +173,7 @@ const static uint8_t PIN_RADIO_CSN = 10;            // hardware pins
 #define SENDPERIOD 2000000                             // broadcast period in microseconds
 #define MUTEPERIOD (SENDPERIOD * 3)
 #define TAGID 0x426C6973  // tag code is 'Blis'
+#define TAGID_ALT 0x426c697a
 #define LEDPERIOD (1000000 / 60)                       // how often we animate
 #define BUTTONSHORTTIME 50000
 #define BUTTONLONGTIME 1000000
@@ -188,7 +209,8 @@ int timeToDisplay;                                  // how long to update the di
 CRGB leds[NUM_LEDS];                                // our display
 
 // mac
-CRGB stored[NUM_LEDS]; // sort of displaybuffer
+// CRGB stored[NUM_LEDS]; // sort of displaybuffer
+char STROBEPACKET = 0;
 
 // macros for setting and getting the packet type and device IDs
 #define getTag(data)  get32(data+0)
@@ -359,24 +381,44 @@ void checkRadioReceive()
   while (_radio.hasData())
   {
     _radio.readData(&incoming);
+
+    // mac
+    // incoming is array of uint8_t 
+
+    Serial.println("getTag: ");
+    Serial.println(getTag(incoming));
+    Serial.println("-----------------------");
+
+    // if (getTag(incoming) == TAGID_ALT) {
+    // FIXME what is this tag value? 'incoming' includes front-padding?
+    if (getTag(incoming) == 0x6f740064) {  // 'otd' in ascii
+      Serial.print("got strobe packet");
+      STROBEPACKET = 1;
+      continue;
+    }
+    // endmac
+
     unsigned long sum = crc(incoming, 30);
     if (sum != ( incoming[30] + (incoming[31] * 256)))    // is the packet corrupt?
       continue;
 
     uint32_t tag = getTag(incoming );
     Serial.println("got");
+
     if (tag != TAGID)                      // is it our packet type?
       continue;
 
     uint16_t unitId = getID(incoming);
     uint16_t currentId = getID(current);
     
-    Serial.println("currentId: "); Serial.print(currentId)
-    Serial.println("from unitID: "); Serial.print(unitId)
+    Serial.print("currentId: ");
+    Serial.println(currentId);
+    Serial.print("from unitID: ");
+    Serial.println(unitId);
 
 #ifndef SUPERFOLLOWER
-    if (unitId < currentId)                       // it was lower rank than me FOLLOWER, ignore it
-      continue;
+        if (unitId < currentId) // it was lower rank than me FOLLOWER, ignore it
+        continue;
     if (unitId > currentId)                // it was higher rank than me, get the data
 #endif
     {
@@ -476,8 +518,8 @@ void ShowRadio(  CRGB *display)
   }
   radioEvent = 0;
   for (int i = 0; i < 5; i++)
-    display[i] &= faded ;
-    // display[i] = faded;
+    // display[i] &= faded ;
+    display[i] = faded;
   faded.nscale8(240);
 
 }
@@ -533,11 +575,12 @@ void showDebug()
 }
 #endif
 
-char strobing = 0;
+// mac
 // unsigned long strobe_duration = 50000;
 unsigned long strobe_duration = 25000;
 unsigned long strobe_end_moment;
 CRGB strobe_led = CRGB(250, 250, 250);
+// endmac
 
 void loop()
 {
@@ -545,18 +588,6 @@ void loop()
   unsigned long delta = now - lastTime;
   lastTime = now;
   
-  // mac
-  // if (program == 1) {
-    // if (strobing == 0) {
-      // Serial.println("start strobing...");
-      // strobing = 1;
-      // strobe_end_moment = now + (strobe_duration_ms * 1000);
-      // for (int i = 0; i < NUM_LEDS; i++)
-        // stored[i] = leds[i];
-  //   }
-  // }
-    
-
   checkButtons(delta);
 #ifdef USEPRESSURE
   strongmanUpdate(delta);
@@ -566,6 +597,14 @@ void loop()
     checkRadioReceive();
     checkRadioSend(delta);
   }
+
+  // mac
+  if (STROBEPACKET == 1) {
+    strobe_end_moment = now + strobe_duration;
+    STROBEPACKET = 0;
+    program = 1;
+  }
+
   //    serviceMotion(leds, NUM_LEDS);
   timeToDisplay += delta;
   while (timeToDisplay > LEDPERIOD)
@@ -577,24 +616,19 @@ void loop()
     if (buttonEvent == BUTTONSHORT)
     {
       buttonEvent = BUTTONONE;
-      // program++;
-      // strobe_end_moment = now + (strobe_duration_ms * 30000);
       strobe_end_moment = now + strobe_duration;
       program = 1;
-      Serial.println("buttonevent- strobe_end_moment, now, diff: ");
-      Serial.println(strobe_end_moment);
-      // Serial.print(' : ');
-      Serial.println(now);
-      Serial.println(now - strobe_end_moment);
-      Serial.println(' ');
+      // send radiopacket with TAGID_ALT to trigger swarm strobe
+      _radio.send(RADIO_ID, TAGID_ALT, sizeof(TAGID_ALT), NRFLite::NO_ACK);
     }
-// #ifdef USEACCEL
-//     mpu6050.update();       // update the accelerometer
-// #endif
+    // #ifdef USEACCEL
+    //     mpu6050.update();       // update the accelerometer
+    // #endif
     switch (program)
     {
       case 0:
         SyncedAnims( current, leds, NUM_LEDS);
+        ShowRadio(  leds);
 // #ifdef SHOWDEBUG
 //         showDebug();    // show some debug info on the display
 // #endif
@@ -602,10 +636,9 @@ void loop()
       case 1:
         if (now > strobe_end_moment) {
           // for (int i = 0; i < NUM_LEDS; i++)
-            // leds[i] = stored[i];
+          // leds[i] = stored[i];
           Serial.println("...ending strobe");
           program = 0;
-          strobing = 0;
         } else {
           // putEffect(current, 4);
           Serial.println("...strobing...");
