@@ -254,13 +254,16 @@ void SyncedAnims( uint8_t *state, CRGB *display, int size) {
     effect += myRandom(state, EFFECTCOUNT - 1) + 1;
     effect %= EFFECTCOUNT;
     putEffect(state, effect);
+    Serial.print("switching to effect ");
+    Serial.println(effect);
     frameCounter = 0;
   }
   switch (effect)
   {
 #ifndef STRONGMAN
     case 0:
-      drawSolid(state, display, size, frameCounter);
+      // drawSolid(state, display, size, frameCounter);
+      drawRainbow(state, display, size, frameCounter);
       break;
     case 1:
       drawRainbow(state, display, size, frameCounter);
@@ -270,6 +273,9 @@ void SyncedAnims( uint8_t *state, CRGB *display, int size) {
       break;
     case 3:
       drawNoise(state, display, size, frameCounter);
+      break;
+    case 4:  //strobe (should define as high int like STRONGMANEFFECT)
+      drawSolid(state, display, size, frameCounter);
       break;
 #endif
     case STRONGMANEFFECT:

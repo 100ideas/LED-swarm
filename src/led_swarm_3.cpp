@@ -1,3 +1,4 @@
+#include <Arduino.h>
 #include <FastLED.h>
 #include <SPI.h>
 #include <NRFLite.h>
@@ -18,7 +19,7 @@
 
 */
 
-//#define SUPERLEADER   // forces highest ID on boot
+// #define SUPERLEADER   // forces highest ID on boot
 //#define SUPERFOLLOWER      // does not transmit
 #define DEFAULTBRIGHTNESS 64
 //#define SHOWDEBUG
@@ -26,9 +27,10 @@
 
 // some build configurations I tested
 //#define NANO150
-//#define NANO60
+// #define NANO60
+#define NANODOT
 //#define TEENSY144
-#define TEENSY150
+// #define TEENSY150  // original from Chuck
 //#define NANO100APA102
 //#define STRONGMAN
 
@@ -54,11 +56,23 @@
 #ifdef NANO60
 #define NANO
 #define USERADIO
-#define USEACCEL
-#define  RGBORDER RGB
+// #define BATTERYTEST
+#define RGBORDER BGR
 #define NUM_LEDS 60                                // how long our strip is
-#define DATA_PIN 7                                  // 2811 data pin
-#define CHIP WS2812
+#define DATA_PIN 5                                  // 2811 data pin
+#define CHIP WS2811
+#endif
+
+#ifdef NANODOT
+#define SUPERLEADER
+#define NANO
+#define USERADIO
+#define RGBORDER BGR
+#define NUM_LEDS 60                                // how long our strip is
+#define DATA_PIN 3
+#define CLOCK_PIN 2
+#define CHIP APA102
+#define PIN_PUSHBUTTON 4
 #endif
 
 #ifdef TEENSY150
@@ -110,7 +124,10 @@ Adafruit_MPRLS mpr = Adafruit_MPRLS(-1, -1);
 
 
 #define SLEEPADDRESS 0
+
+#ifndef PIN_PUSHBUTTON
 #define PIN_PUSHBUTTON 6
+#endif
 
 #ifdef SNOOZE
 #include "Snoozer.h"
@@ -119,8 +136,11 @@ Adafruit_MPRLS mpr = Adafruit_MPRLS(-1, -1);
 #include "SyncedAnims.h"
 #include "dizzy.h"
 
-const char BUTTONUP = 0;
-const char BUTTONDOWN = 1;
+// BUG - button pin is set to PULLUP so BUTTONUP state should be 1, down 0
+// const char BUTTONUP = 0;
+// const char BUTTONDOWN = 1;
+const char BUTTONUP = 1;
+const char BUTTONDOWN = 0;
 
 const char BUTTONONE = 0;
 const char BUTTONSHORT = 1;
@@ -149,16 +169,26 @@ unsigned long muteTimer;
 int brightness;
 int program = 0;                                    // which application is running in loop
 unsigned long lastTime ;                            // for calculation delta time
-int buttonDownTime;                                 // for measuring button presses
+
+// BUG sized int max value is 32767 but BUTTONSHORTTIME is 50000 - so use long
+// int buttonDownTime;                                 // for measuring button presses
+unsigned long buttonDownTime;                                 // for measuring button presses
+
 char buttonState;                                   // is the button up or down
 char buttonEvent;                                   // what the button did (short,long)
 char radioEvent = 0;                                // what the radio
+
+// BUG (potentially) will cause problems if LEDPERIOD value is ever larger than INT 
+//   (unless on Due?) int is too small use long
 int timeToDisplay;                                  // how long to update the display
+// long timeToDisplay;                                  // how long to update the display
 
 // How many leds in your strip?
 // Define the array of leds
 CRGB leds[NUM_LEDS];                                // our display
 
+// mac
+CRGB stored[NUM_LEDS]; // sort of displaybuffer
 
 // macros for setting and getting the packet type and device IDs
 #define getTag(data)  get32(data+0)
@@ -211,7 +241,8 @@ void batteryTester(int delta)
 //------------------------------------------------------------------------
 void checkButtons(int delta)
 {
-  if (digitalRead(PIN_PUSHBUTTON) == 0)
+  // if (digitalRead(PIN_PUSHBUTTON) == 0)
+  if (digitalRead(PIN_PUSHBUTTON) == BUTTONDOWN)
   {
     if (buttonState == BUTTONUP)
     {
@@ -226,11 +257,17 @@ void checkButtons(int delta)
     if (buttonState == BUTTONDOWN)
     {
       if (buttonDownTime > BUTTONSHORTTIME)
+      {
+        Serial.println("detected SHORT button event...");
         buttonEvent = BUTTONSHORT;
-      if (buttonDownTime > BUTTONLONGTIME)
-        buttonEvent = BUTTONLONG;
+        if (buttonDownTime > BUTTONLONGTIME)
+        {
+          Serial.println("detected LONG button event...");
+          buttonEvent = BUTTONLONG;
+        }
+        buttonState = BUTTONUP;
+      }
     }
-    buttonState = BUTTONUP;
   }
 #ifdef SNOOZE
 
@@ -333,6 +370,10 @@ void checkRadioReceive()
 
     uint16_t unitId = getID(incoming);
     uint16_t currentId = getID(current);
+    
+    Serial.println("currentId: "); Serial.print(currentId)
+    Serial.println("from unitID: "); Serial.print(unitId)
+
 #ifndef SUPERFOLLOWER
     if (unitId < currentId)                       // it was lower rank than me FOLLOWER, ignore it
       continue;
@@ -417,20 +458,26 @@ void setup() {
   lastTime = micros();
 }
 
+// utility to display radio info on first 5 LEDs
 static bool gotone = false;
 void ShowRadio(  CRGB *display)
 {
   static CRGB faded = CRGB(0, 0, 0);
   if ( radioEvent == 1)
   {
+    Serial.println("  received signal OK");
     faded = CRGB(50, 0, 0);
     gotone = true;
   }
   if ( radioEvent == 2)
+  {
+    // Serial.println("  ..))) radioEvent 2");
     faded = CRGB(0, 50, 0);
+  }
   radioEvent = 0;
   for (int i = 0; i < 5; i++)
-    display[i] = faded;
+    display[i] &= faded ;
+    // display[i] = faded;
   faded.nscale8(240);
 
 }
@@ -486,11 +533,29 @@ void showDebug()
 }
 #endif
 
+char strobing = 0;
+// unsigned long strobe_duration = 50000;
+unsigned long strobe_duration = 25000;
+unsigned long strobe_end_moment;
+CRGB strobe_led = CRGB(250, 250, 250);
+
 void loop()
 {
   unsigned long now = micros();
   unsigned long delta = now - lastTime;
   lastTime = now;
+  
+  // mac
+  // if (program == 1) {
+    // if (strobing == 0) {
+      // Serial.println("start strobing...");
+      // strobing = 1;
+      // strobe_end_moment = now + (strobe_duration_ms * 1000);
+      // for (int i = 0; i < NUM_LEDS; i++)
+        // stored[i] = leds[i];
+  //   }
+  // }
+    
 
   checkButtons(delta);
 #ifdef USEPRESSURE
@@ -506,42 +571,68 @@ void loop()
   while (timeToDisplay > LEDPERIOD)
   {
     timeToDisplay -= LEDPERIOD;
-#ifdef BATTERYTEST
-    batteryTester(delta);        // include to run radion battery test
-#else
+// #ifdef BATTERYTEST
+//     batteryTester(delta);        // include to run radion battery test
+// #else
     if (buttonEvent == BUTTONSHORT)
     {
       buttonEvent = BUTTONONE;
-      program++;
+      // program++;
+      // strobe_end_moment = now + (strobe_duration_ms * 30000);
+      strobe_end_moment = now + strobe_duration;
+      program = 1;
+      Serial.println("buttonevent- strobe_end_moment, now, diff: ");
+      Serial.println(strobe_end_moment);
+      // Serial.print(' : ');
+      Serial.println(now);
+      Serial.println(now - strobe_end_moment);
+      Serial.println(' ');
     }
-#ifdef USEACCEL
-    mpu6050.update();       // update the accelerometer
-#endif
+// #ifdef USEACCEL
+//     mpu6050.update();       // update the accelerometer
+// #endif
     switch (program)
     {
       case 0:
         SyncedAnims( current, leds, NUM_LEDS);
-#ifdef SHOWDEBUG
-        showDebug();    // show some debug info on the display
-#endif
+// #ifdef SHOWDEBUG
+//         showDebug();    // show some debug info on the display
+// #endif
         break;
       case 1:
-        SyncedAnims( current, leds, NUM_LEDS);
+        if (now > strobe_end_moment) {
+          // for (int i = 0; i < NUM_LEDS; i++)
+            // leds[i] = stored[i];
+          Serial.println("...ending strobe");
+          program = 0;
+          strobing = 0;
+        } else {
+          // putEffect(current, 4);
+          Serial.println("...strobing...");
+          // SyncedAnims( current, leds, NUM_LEDS);
+          for (int i = 0; i < NUM_LEDS; i++)
+            leds[i] = strobe_led;
+        }
+        break;
+      case 2:
+        // SyncedAnims( current, leds, NUM_LEDS);
         ShowRadio(  leds);
         break;
-#ifdef USEACCEL
-      case 2:
-        DizzyGame( current, leds, NUM_LEDS);
-        break;
-#endif
+// #ifdef USEACCEL
+//       case 2:
+//         Serial.println("start program 2");
+//         DizzyGame( current, leds, NUM_LEDS);
+//         break;
+// #endif
       default:
+        Serial.println("start default program");
         program++;
-        if (program >= 3)
+        if (program >= 3)  /// maybe should be >= 2?
           program = 0;
         break;
 
     }
-#endif
+// #endif
     FastLED.show();
   }
 }
