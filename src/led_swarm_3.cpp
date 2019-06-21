@@ -80,7 +80,7 @@
 // #define RGBORDER BGR
 #endif
 
-#ifdef NANODOTPROTOBOARD  //nanoatmega328 not nanoatmega328new in platformio.ini
+#ifdef NANODOTPROTOBOARD  //nanoatmega328new not nanoatmega328 in platformio.ini
 // #define SUPERLEADER
 #define NANO
 #define USERADIO
